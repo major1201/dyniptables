@@ -1,0 +1,89 @@
+#!/bin/bash
+
+set -e
+
+cache_dir="/var/cache/dyniptables/"
+
+usage() {
+    echo "Usage: dyniptables [SUBCOMMAND] [OPTION]...
+Make iptables support domain expression, useful when you use DDNS
+
+Subcommands:
+    update              create or update the iptables rules
+        update [Main Chain] [Sub-chain] [iptables option]...
+
+    destroy             destroy iptables rules by custom chain
+        destroy [Main Chain] [Sub-chain]
+
+Domain expression:
+    '{www.yourdomain.com}'
+
+Examples:
+    dyniptables update INPUT mychainname -s '{www.example.com}' -j ACCEPT
+    dyniptables destroy INPUT mychainname
+"
+}
+
+resolve() {
+    local domain=$1
+    mkdir -p "${cache_dir}${domain}"
+    cd "${cache_dir}${domain}"
+    dig +noall +answer -t A "${domain}" | awk '$4 == "A" {print $5}' > "$(date +%Y%m%d%H%M%S%N)"
+    sort "${cache_dir}${domain}"/* | uniq | paste -sd ','
+}
+
+update() {
+    local chain
+    local subchain
+    chain=$1
+    subchain=$2
+
+    # build cache dir
+    mkdir -p "${cache_dir}"
+
+    # clear old cache data
+    find "${cache_dir}" -mtime +3 -delete
+
+    declare -a pargs
+    for arg in "${@:3}"; do
+        if [[ "${arg}" =~ ^\{.+}$ ]]; then
+            local result
+            result="$(resolve "${arg:1:(( ${#arg} - 2 ))}")"  # remove braces and resolve the domain
+            if [[ "${result}" == "" ]]; then
+                exit 0
+            else
+                pargs+=("${result}")
+            fi
+        else
+            pargs+=("${arg}")
+        fi
+    done
+
+    # inject
+    sudo iptables -N "${subchain}" 2>/dev/null || printf ""
+    sudo iptables -F "${subchain}"
+    sudo iptables -A "${subchain}" "${pargs[@]}"
+    sudo iptables -C "${chain}" -j "${subchain}" 2>/dev/null || sudo iptables -I "${chain}" -j "${subchain}"
+}
+
+destroy() {
+    local chain
+    local subchain
+    chain=$1
+    subchain=$2
+
+    sudo iptables -C "${chain}" -j "${subchain}" 2>/dev/null && sudo iptables -D "${chain}" -j "${subchain}"
+    sudo iptables -nL "${subchain}" >/dev/null 2>/dev/null && sudo iptables -F "${subchain}" && sudo iptables -X "${subchain}" || printf ""
+}
+
+case "$1" in
+update)
+    update "${@:2}"
+    ;;
+destroy)
+    destroy "$2" "$3"
+    ;;
+*)
+    usage
+    ;;
+esac
