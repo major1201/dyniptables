@@ -42,7 +42,7 @@ update() {
     mkdir -p "${cache_dir}"
 
     # clear old cache data
-    find "${cache_dir}" -mtime +3 -delete
+    find "${cache_dir}" -type f -mtime +3 -delete
 
     declare -a pargs
     for arg in "${@:3}"; do
